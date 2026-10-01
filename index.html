@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Тест прямого канала</title>
+<style>
+/* Раскладка: одна колонка карточек-шагов, сверху условия теста, снизу отчёт. */
+:root {
+  --bg: #f3f5f4;
+  --surface: #ffffff;
+  --fg: #16201d;
+  --muted: #5d6b66;
+  --line: #d6dedb;
+  --accent: #0f7a63;
+  --accent-ink: #ffffff;
+  --good: #1f8a4c;
+  --warn: #b26a00;
+  --bad: #c0362c;
+  --code-bg: #eef2f0;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1513; --surface: #17201d; --fg: #e3ebe8; --muted: #93a39d; --line: #2b3834;
+    --accent: #3fbf9c; --accent-ink: #06231b; --good: #4cc27e; --warn: #e0a440; --bad: #ef6b60;
+    --code-bg: #111a17; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --surface: #17201d; --fg: #e3ebe8; --muted: #93a39d; --line: #2b3834;
+  --accent: #3fbf9c; --accent-ink: #06231b; --good: #4cc27e; --warn: #e0a440; --bad: #ef6b60;
+  --code-bg: #111a17; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-body);
+  padding-inline: 16px; padding-block: max(16px, env(safe-area-inset-top, 0px)) 40px;
+}
+main { max-width: 720px; margin: 0 auto; display: grid; gap: 16px; }
+h1 { font-size: 24px; margin: 8px 0 0; text-wrap: balance; }
+h2 { font-size: 17px; margin: 0; }
+p { margin: 0; }
+.lead { color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px; display: grid; gap: 12px; min-width: 0;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: 15px; }
+select, textarea, input[type="text"] {
+  width: 100%; font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+}
+textarea { font: 12px/1.4 var(--font-mono); min-height: 84px; resize: vertical; word-break: break-all; }
+button {
+  font: inherit; font-weight: 600; border-radius: 8px; padding: 9px 14px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+}
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.roles button { padding: 12px; }
+.roles button[aria-pressed="false"] { background: transparent; color: var(--accent); }
+.steps { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.steps li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding-bottom: 6px; }
+.steps li:last-child { border-bottom: 0; }
+.steps .k { color: var(--muted); }
+.steps .v { font-variant-numeric: tabular-nums; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.ok { color: var(--good); } .wait { color: var(--warn); } .fail { color: var(--bad); } .idle { color: var(--muted); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; }
+.chat { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; font-size: 14px; }
+.chat .me { color: var(--accent); }
+.note { font-size: 13px; color: var(--muted); }
+pre.report { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px; font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 420px) { .roles { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Тест прямого канала</h1>
+    <p class="lead">Проверяет, выдают ли STUN-серверы внешний адрес и соединяются ли два телефона напрямую, без TURN. Откройте в Chrome или Safari, не во встроенном браузере мессенджера.</p>
+  </header>
+
+  <section class="card" aria-labelledby="cond-h">
+    <h2 id="cond-h">Условия теста</h2>
+    <label for="operator">Ваша сеть
+      <select id="operator">
+        <option>МТС</option><option>Билайн</option><option>МегаФон</option><option>Т2</option>
+        <option>Yota</option><option>Домашний Wi-Fi</option><option>Другое</option>
+      </select>
+    </label>
+    <label class="check" for="novpn"><input id="novpn" type="checkbox" checked> VPN выключен</label>
+    <label for="stun">STUN-серверы, по одному на строку
+      <textarea id="stun" rows="4" spellcheck="false">stun:stun.sipnet.ru:3478
+stun:stun.zadarma.com:3478
+stun:stun.l.google.com:19302
+stun:stun.cloudflare.com:3478</textarea>
+    </label>
+  </section>
+
+  <section class="card" aria-labelledby="stun-h">
+    <h2 id="stun-h">Шаг 1. Проверка STUN</h2>
+    <p class="note">Каждый сервер проверяется отдельно, до 6 секунд. Внешний адрес — это то, как вас видит интернет.</p>
+    <div class="row"><button id="stunRun">Проверить STUN</button></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Сервер</th><th>Результат</th><th>Внешний адрес</th><th>Время</th></tr></thead>
+        <tbody id="stunBody"><tr><td colspan="4" class="idle">Ещё не проверяли</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="ch-h">
+    <h2 id="ch-h">Шаг 2. Прямой канал между двумя телефонами</h2>
+    <p class="note">Один телефон начинает, второй отвечает. Анкеты передайте друг другу в любом мессенджере. В анкете ваши IP-адреса, отправляйте её только напарнику по тесту.</p>
+    <div class="roles">
+      <button id="roleA" aria-pressed="false">Я начинаю</button>
+      <button id="roleB" aria-pressed="false">Я отвечаю</button>
+    </div>
+
+    <div id="paneA" hidden>
+      <div class="row"><button id="mkOffer">Создать анкету</button></div>
+      <label for="offerOut">Ваша анкета: скопируйте и отправьте напарнику
+        <textarea id="offerOut" readonly></textarea>
+      </label>
+      <div class="row"><button class="ghost" id="cpOffer" disabled>Скопировать анкету</button></div>
+      <label for="answerIn">Ответ напарника: вставьте сюда
+        <textarea id="answerIn" spellcheck="false"></textarea>
+      </label>
+      <div class="row"><button id="connect" disabled>Подключить</button></div>
+    </div>
+
+    <div id="paneB" hidden>
+      <label for="offerIn">Анкета напарника: вставьте сюда
+        <textarea id="offerIn" spellcheck="false"></textarea>
+      </label>
+      <div class="row"><button id="mkAnswer">Создать ответ</button></div>
+      <label for="answerOut">Ваш ответ: скопируйте и отправьте напарнику
+        <textarea id="answerOut" readonly></textarea>
+      </label>
+      <div class="row"><button class="ghost" id="cpAnswer" disabled>Скопировать ответ</button></div>
+    </div>
+
+    <ul class="steps" aria-live="polite">
+      <li><span class="k">Мои кандидаты</span><span class="v" id="sCand">—</span></li>
+      <li><span class="k">Соединение</span><span class="v" id="sIce"><span class="pill idle">не начато</span></span></li>
+      <li><span class="k">Канал данных</span><span class="v" id="sDc"><span class="pill idle">закрыт</span></span></li>
+      <li><span class="k">Время сборки</span><span class="v" id="sTime">—</span></li>
+      <li><span class="k">Путь</span><span class="v" id="sPath">—</span></li>
+      <li><span class="k">Задержка туда-обратно</span><span class="v" id="sRtt">—</span></li>
+    </ul>
+
+    <div id="chatBox" hidden>
+      <div class="chat" id="chat"></div>
+      <div class="row">
+        <input id="msg" type="text" placeholder="Сообщение" aria-label="Сообщение" style="flex:1;min-width:0">
+        <button id="send">Отправить</button>
+      </div>
+    </div>
+    <div class="row"><button class="ghost" id="reset">Начать заново</button></div>
+  </section>
+
+  <section class="card" aria-labelledby="rep-h">
+    <h2 id="rep-h">Отчёт</h2>
+    <p class="note">Скопируйте и пришлите в общий чат теста.</p>
+    <pre class="report" id="report">Отчёт появится после проверки.</pre>
+    <div class="row"><button id="cpReport">Скопировать отчёт</button></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const GATHER_MS = 6000, CONNECT_MS = 30000;
+  const state = { role: null, pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null,
+    cand: null, ice: 'не начато', result: null, stun: [], timer: null, pinger: null };
+
+  const servers = () => $('stun').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const pill = (cls, text) => `<span class="pill ${cls}">${text}</span>`;
+
+  // --- кандидаты ---
+  function parseCand(line) {
+    const m = line.match(/candidate:\S+ \d+ (\S+) \d+ (\S+) (\d+) typ (\S+)/i);
+    return m ? { proto: m[1].toLowerCase(), addr: m[2], port: m[3], type: m[4] } : null;
+  }
+  function countCands(sdp) {
+    const c = { host: 0, srflx: 0, relay: 0, prflx: 0 };
+    sdp.split(/\r?\n/).forEach(l => { const p = l.startsWith('a=candidate:') && parseCand(l.slice(2)); if (p && c[p.type] !== undefined) c[p.type]++; });
+    return c;
+  }
+  const fmtMs = ms => ms < 1000 ? ms + ' мс' : (ms / 1000).toFixed(1) + ' с';
+  const candText = c => `host ${c.host}, srflx ${c.srflx}` + (c.relay ? `, relay ${c.relay}` : '');
+
+  // --- упаковка анкеты ---
+  const b64u = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => ch.charCodeAt(0));
+  async function pack(desc) {
+    const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+    if ('CompressionStream' in window) {
+      const buf = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer();
+      return 'W1.' + b64u(new Uint8Array(buf));
+    }
+    return 'W0.' + b64u(new TextEncoder().encode(json));
+  }
+  async function unpack(text) {
+    const s = text.trim().replace(/\s+/g, '');
+    let json;
+    if (s.startsWith('W1.')) {
+      if (!('DecompressionStream' in window)) throw new Error('Браузер не умеет распаковывать анкету. Обновите его или откройте в Chrome.');
+      json = await new Response(new Blob([unb64u(s.slice(3))]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+    } else if (s.startsWith('W0.')) {
+      json = new TextDecoder().decode(unb64u(s.slice(3)));
+    } else if (s.startsWith('{')) {
+      json = s;
+    } else {
+      throw new Error('Это не анкета теста. Скопируйте текст целиком, он начинается с W1. или W0.');
+    }
+    const o = JSON.parse(json);
+    return { type: o.t || o.type, sdp: o.s || o.sdp };
+  }
+
+  async function copy(text, btn) {
+    try { await navigator.clipboard.writeText(text); flash(btn, 'Скопировано'); }
+    catch { flash(btn, 'Выделите текст и скопируйте вручную'); }
+  }
+  function flash(btn, text) { const old = btn.textContent; btn.textContent = text; setTimeout(() => btn.textContent = old, 1800); }
+
+  // --- шаг 1: STUN ---
+  function probe(url) {
+    return new Promise(resolve => {
+      const t = performance.now();
+      let pc;
+      try { pc = new RTCPeerConnection({ iceServers: [{ urls: url }] }); }
+      catch { resolve({ url, ok: false, err: 'неверный адрес' }); return; }
+      let done = false;
+      const finish = r => { if (done) return; done = true; try { pc.close(); } catch {} resolve(r); };
+      pc.onicecandidate = e => {
+        if (!e.candidate) { finish({ url, ok: false, ms: Math.round(performance.now() - t) }); return; }
+        const p = parseCand(e.candidate.candidate);
+        if (p && p.type === 'srflx') finish({ url, ok: true, addr: `${p.addr}:${p.port}`, ms: Math.round(performance.now() - t) });
+      };
+      setTimeout(() => finish({ url, ok: false, ms: GATHER_MS }), GATHER_MS);
+      pc.createDataChannel('probe');
+      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => finish({ url, ok: false, err: 'ошибка браузера' }));
+    });
+  }
+  $('stunRun').onclick = async () => {
+    const list = servers();
+    if (!('RTCPeerConnection' in window)) { $('stunBody').innerHTML = `<tr><td colspan="4" class="fail">Этот браузер не поддерживает WebRTC</td></tr>`; return; }
+    $('stunRun').disabled = true;
+    $('stunBody').innerHTML = list.map(u => `<tr><td>${u.replace(/^stun:/, '')}</td><td class="wait">проверяю…</td><td></td><td></td></tr>`).join('');
+    state.stun = await Promise.all(list.map(probe));
+    $('stunBody').innerHTML = state.stun.map(r => `<tr><td>${r.url.replace(/^stun:/, '')}</td>
+      <td class="${r.ok ? 'ok' : 'fail'}">${r.ok ? 'ответил' : (r.err || 'нет ответа')}</td>
+      <td>${r.addr || '—'}</td><td>${r.ms != null ? (r.ms / 1000).toFixed(1) + ' с' : '—'}</td></tr>`).join('');
+    $('stunRun').disabled = false;
+    renderReport();
+  };
+
+  // --- шаг 2: канал ---
+  function setRole(role) {
+    resetChannel();
+    state.role = role;
+    $('roleA').setAttribute('aria-pressed', role === 'A');
+    $('roleB').setAttribute('aria-pressed', role === 'B');
+    $('paneA').hidden = role !== 'A';
+    $('paneB').hidden = role !== 'B';
+  }
+  $('roleA').onclick = () => setRole('A');
+  $('roleB').onclick = () => setRole('B');
+
+  function newPc() {
+    const pc = new RTCPeerConnection({ iceServers: servers().map(u => ({ urls: u })) });
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      const map = { new: ['idle', 'не начато'], checking: ['wait', 'проверка путей'], connected: ['ok', 'соединено'],
+        completed: ['ok', 'соединено'], disconnected: ['wait', 'связь прервалась'], failed: ['fail', 'не удалось'], closed: ['idle', 'закрыто'] };
+      const [cls, text] = map[s] || ['idle', s];
+      state.ice = text;
+      $('sIce').innerHTML = pill(cls, text);
+      if (s === 'failed') giveUp('Соединение не собралось: пробить NAT без TURN не удалось.');
+      renderReport();
+    };
+    pc.ondatachannel = e => bindDc(e.channel);
+    return pc;
+  }
+  function gathered(pc) {
+    return new Promise(resolve => {
+      if (pc.iceGatheringState === 'complete') return resolve();
+      const t = setTimeout(resolve, GATHER_MS);
+      pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); } });
+    });
+  }
+  function showCands(sdp) { state.cand = countCands(sdp); $('sCand').textContent = candText(state.cand); if (!state.cand.srflx) $('sCand').innerHTML += ' ' + pill('warn', 'нет внешнего адреса'); }
+
+  function startClock() {
+    state.t0 = performance.now();
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => { if (!state.result) giveUp('За 30 секунд канал не собрался.'); }, CONNECT_MS);
+  }
+  function giveUp(text) {
+    if (state.result) return;
+    state.result = 'не собрался';
+    $('sDc').innerHTML = pill('fail', 'не открылся');
+    $('sTime').textContent = text;
+    renderReport();
+  }
+
+  $('mkOffer').onclick = async () => {
+    try {
+      $('mkOffer').disabled = true;
+      state.pc = newPc();
+      bindDc(state.pc.createDataChannel('test', { ordered: true }));
+      await state.pc.setLocalDescription(await state.pc.createOffer());
+      await gathered(state.pc);
+      showCands(state.pc.localDescription.sdp);
+      $('offerOut').value = await pack(state.pc.localDescription);
+      $('cpOffer').disabled = false; $('connect').disabled = false;
+    } catch (e) { $('offerOut').value = 'Ошибка: ' + e.message; $('mkOffer').disabled = false; }
+  };
+  $('cpOffer').onclick = () => copy($('offerOut').value, $('cpOffer'));
+  $('connect').onclick = async () => {
+    try {
+      const desc = await unpack($('answerIn').value);
+      if (desc.type !== 'answer') throw new Error('Вставлена анкета, а нужен ответ напарника.');
+      $('connect').disabled = true;
+      startClock();
+      await state.pc.setRemoteDescription(desc);
+    } catch (e) { $('sTime').textContent = e.message; }
+  };
+
+  $('mkAnswer').onclick = async () => {
+    try {
+      const desc = await unpack($('offerIn').value);
+      if (desc.type !== 'offer') throw new Error('Вставлен ответ, а нужна анкета напарника.');
+      $('mkAnswer').disabled = true;
+      state.pc = newPc();
+      await state.pc.setRemoteDescription(desc);
+      await state.pc.setLocalDescription(await state.pc.createAnswer());
+      await gathered(state.pc);
+      showCands(state.pc.localDescription.sdp);
+      $('answerOut').value = await pack(state.pc.localDescription);
+      $('cpAnswer').disabled = false;
+    } catch (e) { $('answerOut').value = 'Ошибка: ' + e.message; $('mkAnswer').disabled = false; }
+  };
+  $('cpAnswer').onclick = () => copy($('answerOut').value, $('cpAnswer'));
+
+  function bindDc(dc) {
+    state.dc = dc;
+    dc.onopen = async () => {
+      if (state.role === 'A') state.connectMs = Math.round(performance.now() - state.t0);
+      state.result = 'собрался';
+      clearTimeout(state.timer);
+      $('sDc').innerHTML = pill('ok', 'открыт');
+      $('sTime').textContent = state.connectMs != null ? fmtMs(state.connectMs) : 'считает телефон, который начинал';
+      $('chatBox').hidden = false;
+      await readPath();
+      state.pinger = setInterval(() => { if (dc.readyState === 'open') dc.send(JSON.stringify({ k: 'ping', ts: performance.now() })); }, 2000);
+      renderReport();
+    };
+    dc.onclose = () => { $('sDc').innerHTML = pill('idle', 'закрыт'); clearInterval(state.pinger); };
+    dc.onmessage = e => {
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.k === 'ping') dc.send(JSON.stringify({ k: 'pong', ts: m.ts }));
+      else if (m.k === 'pong') { state.rtt = Math.round(performance.now() - m.ts); $('sRtt').textContent = state.rtt + ' мс'; renderReport(); }
+      else if (m.k === 'msg') addChat(m.text, false);
+    };
+  }
+
+  async function readPath() {
+    const stats = await state.pc.getStats();
+    let pair = null;
+    stats.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+    if (!pair) stats.forEach(r => { if (r.type === 'candidate-pair' && (r.selected || (r.nominated && r.state === 'succeeded'))) pair = r; });
+    if (!pair) { $('sPath').textContent = 'браузер не сообщил'; return; }
+    const loc = stats.get(pair.localCandidateId) || {}, rem = stats.get(pair.remoteCandidateId) || {};
+    const relayed = loc.candidateType === 'relay' || rem.candidateType === 'relay';
+    state.path = `${loc.candidateType || '?'} ↔ ${rem.candidateType || '?'}, ${(loc.protocol || '').toUpperCase()}`;
+    $('sPath').innerHTML = state.path + ' ' + pill(relayed ? 'warn' : 'ok', relayed ? 'через реле' : 'напрямую');
+  }
+
+  function addChat(text, mine) {
+    const div = document.createElement('div');
+    div.className = mine ? 'me' : '';
+    div.textContent = (mine ? 'Я: ' : 'Напарник: ') + text;
+    $('chat').appendChild(div); $('chat').scrollTop = $('chat').scrollHeight;
+  }
+  function sendMsg() {
+    const t = $('msg').value.trim();
+    if (!t || !state.dc || state.dc.readyState !== 'open') return;
+    state.dc.send(JSON.stringify({ k: 'msg', text: t })); addChat(t, true); $('msg').value = '';
+  }
+  $('send').onclick = sendMsg;
+  $('msg').addEventListener('keydown', e => { if (e.key === 'Enter') sendMsg(); });
+
+  function resetChannel() {
+    clearTimeout(state.timer); clearInterval(state.pinger);
+    try { state.pc && state.pc.close(); } catch {}
+    Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null });
+    ['offerOut', 'answerIn', 'offerIn', 'answerOut'].forEach(id => $(id).value = '');
+    ['mkOffer', 'mkAnswer'].forEach(id => $(id).disabled = false);
+    ['cpOffer', 'connect', 'cpAnswer'].forEach(id => $(id).disabled = true);
+    $('sCand').textContent = '—'; $('sIce').innerHTML = pill('idle', 'не начато'); $('sDc').innerHTML = pill('idle', 'закрыт');
+    $('sTime').textContent = '—'; $('sPath').textContent = '—'; $('sRtt').textContent = '—';
+    $('chat').innerHTML = ''; $('chatBox').hidden = true;
+    renderReport();
+  }
+  $('reset').onclick = () => setRole(state.role);
+
+  // --- отчёт ---
+  function renderReport() {
+    const lines = [
+      `Тест прямого канала, ${new Date().toLocaleString('ru-RU')}`,
+      `Сеть: ${$('operator').value}; VPN выключен: ${$('novpn').checked ? 'да' : 'нет'}`,
+    ];
+    if (state.stun.length) {
+      lines.push('STUN: ' + state.stun.map(r => `${r.url.replace(/^stun:/, '')} ${r.ok ? 'да' : 'нет'}`).join('; '));
+    }
+    if (state.role) {
+      lines.push(`Роль: ${state.role === 'A' ? 'начинаю' : 'отвечаю'}`);
+      if (state.cand) lines.push(`Мои кандидаты: ${candText(state.cand)}`);
+      lines.push(`Канал: ${state.result || 'в процессе'}` + (state.connectMs != null ? ` за ${fmtMs(state.connectMs)}` : '') + `; соединение: ${state.ice}`);
+      if (state.path) lines.push(`Путь: ${state.path}`);
+      if (state.rtt != null) lines.push(`Задержка туда-обратно: ${state.rtt} мс`);
+    }
+    $('report').textContent = lines.join('\n');
+  }
+  $('operator').onchange = renderReport; $('novpn').onchange = renderReport;
+  $('cpReport').onclick = () => copy($('report').textContent, $('cpReport'));
+  renderReport();
+})();
+</script>
+</body>
+</html>
