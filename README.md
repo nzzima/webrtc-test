@@ -15,3 +15,17 @@
 Библиотеки для QR лежат рядом со страницей, чтобы не зависеть от CDN:
 `qrcode.js` ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT) рисует код,
 `jsQR.js` ([jsQR](https://github.com/cozmo/jsQR) 1.4.0, Apache-2.0) читает его с камеры.
+
+## Тест общего почтового ящика
+
+`mailbox_test.py` проверяет, можно ли держать очередь сообщений в обычном почтовом ящике. Телефоны пишут
+в общий ящик Яндекса и Gmail командой IMAP APPEND и читают письма друг друга, скрипт считает задержку и
+ошибки. Работает на стандартной библиотеке Python: на iPhone в a-Shell, на Android в Termux.
+
+```
+curl -O https://nzzima.github.io/webrtc-test/mailbox_test.py
+python3 mailbox_test.py
+```
+
+Паролей в скрипте нет. При первом запуске он спрашивает адреса ящиков и пароли приложений и хранит их в
+`mailbox_test.json` на телефоне.
