@@ -82,6 +82,9 @@ th { color: var(--muted); font-weight: 600; }
 .chat { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; font-size: 14px; }
 .chat .me { color: var(--accent); }
 .note { font-size: 13px; color: var(--muted); }
+.qr { background: #fff; padding: 8px; border-radius: 8px; width: 100%; max-width: 360px; margin: 8px auto 0; }
+.qr svg { display: block; width: 100%; height: auto; }
+#scanBox video { display: block; width: 100%; max-height: 60vh; border-radius: 8px; background: #000; object-fit: cover; }
 pre.report { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px; font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 420px) { .roles { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -125,7 +128,7 @@ stun:stun.cloudflare.com:3478</textarea>
 
   <section class="card" aria-labelledby="ch-h">
     <h2 id="ch-h">Шаг 2. Прямой канал между двумя телефонами</h2>
-    <p class="note">Один телефон начинает, второй отвечает. Анкеты передайте друг другу в любом мессенджере. В анкете ваши IP-адреса, отправляйте её только напарнику по тесту.</p>
+    <p class="note">Один телефон начинает, второй отвечает. Анкеты передайте друг другу: отсканируйте QR с экрана напарника или перешлите текст в любом мессенджере. В анкете ваши IP-адреса, отправляйте её только напарнику по тесту.</p>
     <div class="roles">
       <button id="roleA" aria-pressed="false">Я начинаю</button>
       <button id="roleB" aria-pressed="false">Я отвечаю</button>
@@ -133,25 +136,33 @@ stun:stun.cloudflare.com:3478</textarea>
 
     <div id="paneA" hidden>
       <div class="row"><button id="mkOffer">Создать анкету</button></div>
-      <label for="offerOut">Ваша анкета: скопируйте и отправьте напарнику
+      <div class="qr" id="offerQr" hidden></div>
+      <label for="offerOut">Ваша анкета: покажите QR напарнику или скопируйте текст и отправьте
         <textarea id="offerOut" readonly></textarea>
       </label>
       <div class="row"><button class="ghost" id="cpOffer" disabled>Скопировать анкету</button></div>
-      <label for="answerIn">Ответ напарника: вставьте сюда
+      <label for="answerIn">Ответ напарника: отсканируйте его QR или вставьте текст сюда
         <textarea id="answerIn" spellcheck="false"></textarea>
       </label>
-      <div class="row"><button id="connect" disabled>Подключить</button></div>
+      <div class="row"><button class="ghost" id="scanAnswer" disabled>Сканировать QR ответа</button><button id="connect" disabled>Подключить</button></div>
     </div>
 
     <div id="paneB" hidden>
-      <label for="offerIn">Анкета напарника: вставьте сюда
+      <label for="offerIn">Анкета напарника: отсканируйте её QR или вставьте текст сюда
         <textarea id="offerIn" spellcheck="false"></textarea>
       </label>
-      <div class="row"><button id="mkAnswer">Создать ответ</button></div>
-      <label for="answerOut">Ваш ответ: скопируйте и отправьте напарнику
+      <div class="row"><button class="ghost" id="scanOffer">Сканировать QR анкеты</button><button id="mkAnswer">Создать ответ</button></div>
+      <div class="qr" id="answerQr" hidden></div>
+      <label for="answerOut">Ваш ответ: покажите QR напарнику или скопируйте текст и отправьте
         <textarea id="answerOut" readonly></textarea>
       </label>
       <div class="row"><button class="ghost" id="cpAnswer" disabled>Скопировать ответ</button></div>
+    </div>
+
+    <div id="scanBox" hidden>
+      <video id="scanVideo" playsinline muted></video>
+      <p class="note" id="scanNote">Наведите камеру на QR на экране напарника.</p>
+      <div class="row"><button class="ghost" id="scanStop">Закрыть камеру</button></div>
     </div>
 
     <ul class="steps" aria-live="polite">
@@ -181,6 +192,9 @@ stun:stun.cloudflare.com:3478</textarea>
   </section>
 </main>
 
+<!-- qrcode.js: qrcode-generator 1.4.4, MIT. jsQR.js: jsQR 1.4.0, Apache-2.0. Скачаны с npm. -->
+<script src="qrcode.js" defer></script>
+<script src="jsQR.js" defer></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -237,6 +251,51 @@ stun:stun.cloudflare.com:3478</textarea>
     catch { flash(btn, 'Выделите текст и скопируйте вручную'); }
   }
   function flash(btn, text) { const old = btn.textContent; btn.textContent = text; setTimeout(() => btn.textContent = old, 1800); }
+
+  // --- QR ---
+  function showQr(el, text) {
+    try {
+      const q = qrcode(0, 'L');
+      q.addData(text); q.make();
+      el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+    } catch { el.textContent = 'Анкета не помещается в QR, передайте её текстом.'; }
+    el.hidden = false;
+  }
+
+  const scan = { stream: null, raf: 0 };
+  async function startScan(target, after) {
+    stopScan();
+    $('scanBox').hidden = false;
+    $('scanNote').textContent = 'Наведите камеру на QR на экране напарника.';
+    $('scanBox').scrollIntoView({ block: 'center' });
+    try {
+      scan.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+    } catch (e) { $('scanNote').textContent = 'Камера недоступна (' + e.name + '). Вставьте текст вручную.'; return; }
+    const video = $('scanVideo'), canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+    video.srcObject = scan.stream;
+    await video.play();
+    const tick = () => {
+      if (video.readyState >= 2) {
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+        if (code && /^W[01]\./.test(code.data)) { stopScan(); target.value = code.data; after(); return; }
+        if (code) $('scanNote').textContent = 'Это не QR анкеты теста.';
+      }
+      scan.raf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+  function stopScan() {
+    cancelAnimationFrame(scan.raf);
+    if (scan.stream) scan.stream.getTracks().forEach(t => t.stop());
+    scan.stream = null;
+    $('scanVideo').srcObject = null;
+    $('scanBox').hidden = true;
+  }
+  $('scanStop').onclick = stopScan;
+  $('scanAnswer').onclick = () => startScan($('answerIn'), () => $('connect').click());
+  $('scanOffer').onclick = () => startScan($('offerIn'), () => $('mkAnswer').click());
 
   // --- шаг 1: STUN ---
   function probe(url) {
@@ -328,7 +387,8 @@ stun:stun.cloudflare.com:3478</textarea>
       await gathered(state.pc);
       showCands(state.pc.localDescription.sdp);
       $('offerOut').value = await pack(state.pc.localDescription);
-      $('cpOffer').disabled = false; $('connect').disabled = false;
+      showQr($('offerQr'), $('offerOut').value);
+      $('cpOffer').disabled = false; $('connect').disabled = false; $('scanAnswer').disabled = false;
     } catch (e) { $('offerOut').value = 'Ошибка: ' + e.message; $('mkOffer').disabled = false; }
   };
   $('cpOffer').onclick = () => copy($('offerOut').value, $('cpOffer'));
@@ -353,6 +413,7 @@ stun:stun.cloudflare.com:3478</textarea>
       await gathered(state.pc);
       showCands(state.pc.localDescription.sdp);
       $('answerOut').value = await pack(state.pc.localDescription);
+      showQr($('answerQr'), $('answerOut').value);
       $('cpAnswer').disabled = false;
     } catch (e) { $('answerOut').value = 'Ошибка: ' + e.message; $('mkAnswer').disabled = false; }
   };
@@ -407,12 +468,13 @@ stun:stun.cloudflare.com:3478</textarea>
   $('msg').addEventListener('keydown', e => { if (e.key === 'Enter') sendMsg(); });
 
   function resetChannel() {
-    clearTimeout(state.timer); clearInterval(state.pinger);
+    clearTimeout(state.timer); clearInterval(state.pinger); stopScan();
     try { state.pc && state.pc.close(); } catch {}
     Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null });
     ['offerOut', 'answerIn', 'offerIn', 'answerOut'].forEach(id => $(id).value = '');
     ['mkOffer', 'mkAnswer'].forEach(id => $(id).disabled = false);
-    ['cpOffer', 'connect', 'cpAnswer'].forEach(id => $(id).disabled = true);
+    ['cpOffer', 'connect', 'scanAnswer', 'cpAnswer'].forEach(id => $(id).disabled = true);
+    ['offerQr', 'answerQr'].forEach(id => { $(id).hidden = true; $(id).innerHTML = ''; });
     $('sCand').textContent = '—'; $('sIce').innerHTML = pill('idle', 'не начато'); $('sDc').innerHTML = pill('idle', 'закрыт');
     $('sTime').textContent = '—'; $('sPath').textContent = '—'; $('sRtt').textContent = '—';
     $('chat').innerHTML = ''; $('chatBox').hidden = true;
