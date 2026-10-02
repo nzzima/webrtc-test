@@ -263,25 +263,41 @@ stun:stun.cloudflare.com:3478</textarea>
   }
 
   const scan = { stream: null, raf: 0 };
+  // Встроенный BarcodeDetector (Chrome на Android) читает плотные QR с экрана лучше jsQR.
+  async function qrDetector() {
+    try {
+      if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) return new BarcodeDetector({ formats: ['qr_code'] });
+    } catch {}
+    return null;
+  }
   async function startScan(target, after) {
     stopScan();
     $('scanBox').hidden = false;
-    $('scanNote').textContent = 'Наведите камеру на QR на экране напарника.';
     $('scanBox').scrollIntoView({ block: 'center' });
-    if (typeof jsQR !== 'function') { $('scanNote').textContent = 'Сканер не загрузился. Обновите страницу или вставьте текст вручную.'; return; }
+    const detector = await qrDetector();
+    if (!detector && typeof jsQR !== 'function') { $('scanNote').textContent = 'Сканер не загрузился. Обновите страницу или вставьте текст вручную.'; return; }
+    $('scanNote').textContent = 'Наведите камеру на QR на экране напарника. Сканер: ' + (detector ? 'встроенный в браузер' : 'jsQR') + '.';
     try {
-      scan.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+      scan.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
     } catch (e) { $('scanNote').textContent = 'Камера недоступна (' + e.name + '). Вставьте текст вручную.'; return; }
+    scan.stream.getVideoTracks()[0].applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
     const video = $('scanVideo'), canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
     video.srcObject = scan.stream;
     await video.play();
-    const tick = () => {
+    const read = async () => {
+      if (detector) { const [code] = await detector.detect(video); return code && code.rawValue; }
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+      return code && code.data;
+    };
+    const stream = scan.stream;
+    const tick = async () => {
       if (video.readyState >= 2) {
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
-        if (code && /^W[01]\./.test(code.data)) { stopScan(); target.value = code.data; after(); return; }
-        if (code) $('scanNote').textContent = 'Это не QR анкеты теста.';
+        const data = await read().catch(() => null);
+        if (scan.stream !== stream) return;
+        if (data && /^W[01]\./.test(data)) { stopScan(); target.value = data; after(); return; }
+        if (data) $('scanNote').textContent = 'Это не QR анкеты теста.';
       }
       scan.raf = requestAnimationFrame(tick);
     };
