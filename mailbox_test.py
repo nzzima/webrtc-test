@@ -3,7 +3,8 @@
 
 Телефон кладёт в ящик письмо с меткой времени, читает письма других телефонов
 и считает задержку и ошибки. В конце сеанса печатает отчёт.
-Запуск: python3 mailbox_test.py [минут сеанса, по умолчанию 10]
+Запуск: python3 mailbox_test.py [минут сеанса] [секунд между записями]
+По умолчанию сеанс 10 минут, запись раз в 20 секунд.
 """
 import imaplib, json, os, socket, statistics, sys, time
 from datetime import datetime
@@ -11,7 +12,7 @@ from email.message import EmailMessage
 
 SERVERS = {'Яндекс': 'imap.yandex.ru', 'Gmail': 'imap.gmail.com'}
 FOLDER = 'mtest'
-WRITE_EVERY, POLL_EVERY = 20, 10  # секунды; опрос раз в 10–30 с по плану шага 2
+WRITE_EVERY, POLL_EVERY = 20, 10  # секунды по умолчанию; опрос раз в 10–30 с по плану шага 2
 CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mailbox_test.json')
 
 
@@ -102,7 +103,7 @@ class Box:
                 self.peers.add(parts[0])
                 self.reads.append((seen, stored))
 
-    def step(self, do_write):
+    def step(self, do_write, do_poll):
         stage = 'вход'
         try:
             if self.imap is None:
@@ -110,8 +111,9 @@ class Box:
             if do_write:
                 stage = 'запись'
                 self.write()
-            stage = 'чтение'
-            self.poll()
+            if do_poll:
+                stage = 'чтение'
+                self.poll()
         except (imaplib.IMAP4.error, OSError, socket.timeout) as e:
             self.error(stage, e)
 
@@ -132,23 +134,28 @@ class Box:
 
 def main():
     minutes = float(sys.argv[1]) if len(sys.argv) > 1 else 10
+    write_every = float(sys.argv[2]) if len(sys.argv) > 2 else WRITE_EVERY
     cfg = load_config()
     boxes = [Box(n, cfg[n]['login'], cfg[n]['password'], cfg['device']) for n in SERVERS if n in cfg]
     if not boxes:
         sys.exit(f'Нет ни одного ящика. Удалите {CONFIG} и запустите заново.')
-    print(f'Сеанс {minutes:g} мин. Не закрывайте приложение. Остановить раньше: Ctrl+C.')
-    start = time.time()
-    last_write = start - WRITE_EVERY
+    print(f'Сеанс {minutes:g} мин, запись раз в {write_every:g} с. Не закрывайте приложение. '
+          'Остановить раньше: Ctrl+C.')
+    start = next_write = next_poll = time.time()
     try:
         while time.time() - start < minutes * 60:
-            do_write = time.time() - last_write >= WRITE_EVERY
+            now = time.time()
+            do_write, do_poll = now >= next_write, now >= next_poll
+            # расписание от прошлого срока, а не от «сейчас»: время самой записи не снижает частоту
             if do_write:
-                last_write = time.time()
+                next_write = max(next_write + write_every, now)
+            if do_poll:
+                next_poll = max(next_poll + POLL_EVERY, now)
             for box in boxes:
-                box.step(do_write)
+                box.step(do_write, do_poll)
             print('\r' + ' | '.join(f'{b.name}: записано {b.written}, прочитано {len(b.reads)}, '
                                     f'ошибок {len(b.errors)}' for b in boxes), end='', flush=True)
-            time.sleep(POLL_EVERY)
+            time.sleep(max(0, min(next_write, next_poll) - time.time()))
     except KeyboardInterrupt:
         pass
     for box in boxes:
@@ -160,7 +167,7 @@ def main():
     print('\n\n' + '\n'.join([
         f'Тест почтового ящика, {datetime.now():%d.%m.%Y %H:%M}',
         f'Телефон: {cfg["device"]}; сеть: {cfg["network"]}; '
-        f'сеанс {(time.time() - start) / 60:.0f} мин; запись раз в {WRITE_EVERY} с, '
+        f'сеанс {(time.time() - start) / 60:.0f} мин; запись раз в {write_every:g} с, '
         f'опрос раз в {POLL_EVERY} с',
     ] + [b.report() for b in boxes]))
 
