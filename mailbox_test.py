@@ -42,7 +42,8 @@ class Box:
         self.name, self.login, self.password, self.device = name, login, password, device
         self.imap, self.last_uid, self.seq = None, None, 0
         self.logins = self.written = 0
-        self.append_s, self.delays, self.errors = [], [], []
+        self.append_s, self.errors = [], []
+        self.offsets, self.reads = [], []  # часы телефона минус часы сервера; (прочитано, сохранено)
         self.peers = set()
 
     def error(self, where, e):
@@ -85,14 +86,21 @@ class Box:
     def poll(self):
         self.imap.noop()
         for uid in self.search(self.last_uid + 1):
-            typ, data = self.imap.uid('FETCH', str(uid), '(BODY.PEEK[HEADER.FIELDS (X-MTEST)])')
+            typ, data = self.imap.uid('FETCH', str(uid), '(INTERNALDATE BODY.PEEK[HEADER.FIELDS (X-MTEST)])')
             seen = time.time()
             self.last_uid = uid
             header = data[0][1].decode(errors='replace') if data and isinstance(data[0], tuple) else ''
             parts = header.replace('X-Mtest:', '').split()
-            if len(parts) == 2 and parts[0] != self.device:
+            # INTERNALDATE ставит сервер при записи, с точностью до секунды; +0.5 убирает сдвиг округления вниз
+            stored = imaplib.Internaldate2tuple(b' '.join(p[0] if isinstance(p, tuple) else p for p in data if p))
+            if len(parts) != 2 or not stored:
+                continue
+            stored = time.mktime(stored) + 0.5
+            if parts[0] == self.device:
+                self.offsets.append(float(parts[1]) - stored)
+            else:
                 self.peers.add(parts[0])
-                self.delays.append(seen - float(parts[1]))
+                self.reads.append((seen, stored))
 
     def step(self, do_write):
         stage = 'вход'
@@ -111,10 +119,13 @@ class Box:
         line = f'{self.name}: входов {self.logins}, записано {self.written}'
         if self.append_s:
             line += f' (APPEND медиана {statistics.median(self.append_s):.1f} с)'
-        line += f', прочитано чужих {len(self.delays)} от {len(self.peers)} тел.'
-        if self.delays:
-            line += (f', задержка медиана {statistics.median(self.delays):.1f} с, '
-                     f'макс {max(self.delays):.1f} с')
+        line += f', прочитано чужих {len(self.reads)} от {len(self.peers)} тел.'
+        offset = statistics.median(self.offsets) if self.offsets else 0
+        if self.reads:
+            # задержка по часам сервера: от записи письма до чтения, часы отправителя не участвуют
+            delays = [seen - offset - stored for seen, stored in self.reads]
+            line += f', задержка медиана {statistics.median(delays):.1f} с, макс {max(delays):.1f} с'
+        line += f', часы телефона {offset:+.1f} с к серверу' if self.offsets else ', часы не сверены'
         line += f', ошибок {len(self.errors)}'
         return '\n'.join([line] + ['  ' + e for e in self.errors[-10:]])
 
@@ -135,7 +146,7 @@ def main():
                 last_write = time.time()
             for box in boxes:
                 box.step(do_write)
-            print('\r' + ' | '.join(f'{b.name}: записано {b.written}, прочитано {len(b.delays)}, '
+            print('\r' + ' | '.join(f'{b.name}: записано {b.written}, прочитано {len(b.reads)}, '
                                     f'ошибок {len(b.errors)}' for b in boxes), end='', flush=True)
             time.sleep(POLL_EVERY)
     except KeyboardInterrupt:
