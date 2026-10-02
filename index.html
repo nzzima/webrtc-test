@@ -258,7 +258,7 @@ stun:stun.cloudflare.com:3478</textarea>
       const q = qrcode(0, 'L');
       q.addData(text); q.make();
       el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
-    } catch { el.textContent = 'Анкета не помещается в QR, передайте её текстом.'; }
+    } catch { el.textContent = 'QR не получился, передайте анкету текстом.'; }
     el.hidden = false;
   }
 
@@ -268,6 +268,7 @@ stun:stun.cloudflare.com:3478</textarea>
     $('scanBox').hidden = false;
     $('scanNote').textContent = 'Наведите камеру на QR на экране напарника.';
     $('scanBox').scrollIntoView({ block: 'center' });
+    if (typeof jsQR !== 'function') { $('scanNote').textContent = 'Сканер не загрузился. Обновите страницу или вставьте текст вручную.'; return; }
     try {
       scan.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
     } catch (e) { $('scanNote').textContent = 'Камера недоступна (' + e.name + '). Вставьте текст вручную.'; return; }
