@@ -466,7 +466,9 @@ stun:stun.cloudflare.com:3478</textarea>
     if (!pair) { $('sPath').textContent = 'браузер не сообщил'; return; }
     const loc = stats.get(pair.localCandidateId) || {}, rem = stats.get(pair.remoteCandidateId) || {};
     const relayed = loc.candidateType === 'relay' || rem.candidateType === 'relay';
-    state.path = `${loc.candidateType || '?'} ↔ ${rem.candidateType || '?'}, ${(loc.protocol || '').toUpperCase()}`;
+    // Пока странице не разрешили камеру, браузер прячет адреса host-кандидатов, поэтому смотрим обе стороны.
+    const family = [loc, rem].map(c => c.address || c.ip || '').map(a => a.includes(':') ? 'IPv6' : /^\d+(\.\d+){3}$/.test(a) ? 'IPv4' : '').find(Boolean);
+    state.path = `${loc.candidateType || '?'} ↔ ${rem.candidateType || '?'}, ${(loc.protocol || '').toUpperCase()}, ${family || 'версию IP браузер скрыл'}`;
     $('sPath').innerHTML = state.path + ' ' + pill(relayed ? 'warn' : 'ok', relayed ? 'через реле' : 'напрямую');
   }
 
