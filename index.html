@@ -172,6 +172,7 @@ stun:stun.cloudflare.com:3478</textarea>
       <li><span class="k">Время сборки</span><span class="v" id="sTime">—</span></li>
       <li><span class="k">Путь</span><span class="v" id="sPath">—</span></li>
       <li><span class="k">Задержка туда-обратно</span><span class="v" id="sRtt">—</span></li>
+      <li><span class="k">Файл</span><span class="v" id="sFile">—</span></li>
     </ul>
 
     <div id="chatBox" hidden>
@@ -180,6 +181,12 @@ stun:stun.cloudflare.com:3478</textarea>
         <input id="msg" type="text" placeholder="Сообщение" aria-label="Сообщение" style="flex:1;min-width:0">
         <button id="send">Отправить</button>
       </div>
+      <div class="row">
+        <input id="file" type="file" aria-label="Файл" style="flex:1 1 100%;min-width:0">
+        <button class="ghost" id="sendFile">Отправить файл</button>
+        <button class="ghost" id="sendTest">Тестовые 10 МБ</button>
+      </div>
+      <p class="note" id="fileNote">Файл идёт напрямую по тому же каналу, что и чат. Скорость считают обе стороны.</p>
     </div>
     <div class="row"><button class="ghost" id="reset">Начать заново</button></div>
   </section>
@@ -200,7 +207,7 @@ stun:stun.cloudflare.com:3478</textarea>
   const $ = id => document.getElementById(id);
   const GATHER_MS = 6000, CONNECT_MS = 30000;
   const state = { role: null, pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null,
-    cand: null, ice: 'не начато', result: null, stun: [], timer: null, pinger: null };
+    cand: null, ice: 'не начато', result: null, stun: [], timer: null, pinger: null, tx: null, rx: null, fileResult: null };
 
   const servers = () => $('stun').value.split('\n').map(s => s.trim()).filter(Boolean);
   const pill = (cls, text) => `<span class="pill ${cls}">${text}</span>`;
@@ -436,8 +443,60 @@ stun:stun.cloudflare.com:3478</textarea>
   };
   $('cpAnswer').onclick = () => copy($('answerOut').value, $('cpAnswer'));
 
+  // --- файл: куски по 16 КБ, их принимают все браузеры; очередь канала держим не больше 4 МБ ---
+  const CHUNK = 16384, QUEUE = 4 * 1048576, TEST_MB = 10, FILE_NOTE = $('fileNote').textContent;
+  const speedText = (bytes, ms) => `${(bytes / 1048576).toFixed(1)} МБ за ${fmtMs(Math.round(ms))}, ` +
+    `${(bytes / 1048576 / (ms / 1000)).toFixed(1)} МБ/с (${(bytes * 8 / ms / 1000).toFixed(1)} Мбит/с)`;
+
+  async function sendBlob(blob, name) {
+    const dc = state.dc;
+    if (!dc || dc.readyState !== 'open' || state.tx) return;
+    state.tx = { size: blob.size, t0: performance.now() };
+    dc.send(JSON.stringify({ k: 'file', name, size: blob.size }));
+    dc.bufferedAmountLowThreshold = QUEUE / 4;
+    for (let off = 0; off < blob.size; off += CHUNK) {
+      if (dc.bufferedAmount > QUEUE) await new Promise(r => { dc.addEventListener('bufferedamountlow', r, { once: true }); dc.addEventListener('close', r, { once: true }); });
+      if (dc.readyState !== 'open') { state.tx = null; $('sFile').textContent = 'канал закрылся во время отправки'; return; }
+      dc.send(await blob.slice(off, off + CHUNK).arrayBuffer());
+      if (off % (CHUNK * 64) === 0) $('sFile').textContent = `отправлено ${Math.round(off / blob.size * 100)}%`;
+    }
+    dc.send(JSON.stringify({ k: 'fileEnd' }));
+    $('sFile').textContent = 'отправлено, ждём подтверждения';
+  }
+  $('sendFile').onclick = () => {
+    const f = $('file').files[0];
+    if (!f) { $('sFile').textContent = 'выберите файл'; return; }
+    sendBlob(f, f.name);
+  };
+  $('sendTest').onclick = () => sendBlob(new Blob([new Uint8Array(TEST_MB * 1048576)]), `тест-${TEST_MB}МБ.bin`);
+
+  function receiveChunk(buf) {
+    if (!state.rx) return;
+    state.rx.parts.push(buf); state.rx.got += buf.byteLength;
+    if (state.rx.parts.length % 64 === 0) $('sFile').textContent = `принято ${Math.round(state.rx.got / state.rx.size * 100)}%`;
+  }
+  function receiveEnd() {
+    const rx = state.rx, ms = performance.now() - rx.t0, blob = new Blob(rx.parts);
+    state.rx = null;
+    state.dc.send(JSON.stringify({ k: 'fileAck', bytes: blob.size }));
+    state.fileResult = `принят ${speedText(blob.size, ms)}` + (blob.size !== rx.size ? ', пришёл не целиком' : '');
+    $('sFile').textContent = state.fileResult;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = rx.name; a.textContent = `Сохранить «${rx.name}»`;
+    $('fileNote').replaceChildren(a);
+    renderReport();
+  }
+  function sentAck(bytes) {
+    const tx = state.tx;
+    state.tx = null;
+    state.fileResult = `отправлен ${speedText(tx.size, performance.now() - tx.t0)}` + (bytes !== tx.size ? ', дошёл не целиком' : '');
+    $('sFile').textContent = state.fileResult;
+    renderReport();
+  }
+
   function bindDc(dc) {
     state.dc = dc;
+    dc.binaryType = 'arraybuffer';
     dc.onopen = async () => {
       if (state.role === 'A') state.connectMs = Math.round(performance.now() - state.t0);
       state.result = 'собрался';
@@ -451,10 +510,14 @@ stun:stun.cloudflare.com:3478</textarea>
     };
     dc.onclose = () => { $('sDc').innerHTML = pill('idle', 'закрыт'); clearInterval(state.pinger); };
     dc.onmessage = e => {
+      if (typeof e.data !== 'string') { receiveChunk(e.data); return; }
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (m.k === 'ping') dc.send(JSON.stringify({ k: 'pong', ts: m.ts }));
       else if (m.k === 'pong') { state.rtt = Math.round(performance.now() - m.ts); $('sRtt').textContent = state.rtt + ' мс'; renderReport(); }
       else if (m.k === 'msg') addChat(m.text, false);
+      else if (m.k === 'file') state.rx = { name: String(m.name), size: m.size, parts: [], got: 0, t0: performance.now() };
+      else if (m.k === 'fileEnd' && state.rx) receiveEnd();
+      else if (m.k === 'fileAck' && state.tx) sentAck(m.bytes);
     };
   }
 
@@ -489,14 +552,14 @@ stun:stun.cloudflare.com:3478</textarea>
   function resetChannel() {
     clearTimeout(state.timer); clearInterval(state.pinger); stopScan();
     try { state.pc && state.pc.close(); } catch {}
-    Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null });
+    Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null, tx: null, rx: null, fileResult: null });
     ['offerOut', 'answerIn', 'offerIn', 'answerOut'].forEach(id => $(id).value = '');
     ['mkOffer', 'mkAnswer'].forEach(id => $(id).disabled = false);
     ['cpOffer', 'connect', 'scanAnswer', 'cpAnswer'].forEach(id => $(id).disabled = true);
     ['offerQr', 'answerQr'].forEach(id => { $(id).hidden = true; $(id).innerHTML = ''; });
     $('sCand').textContent = '—'; $('sIce').innerHTML = pill('idle', 'не начато'); $('sDc').innerHTML = pill('idle', 'закрыт');
-    $('sTime').textContent = '—'; $('sPath').textContent = '—'; $('sRtt').textContent = '—';
-    $('chat').innerHTML = ''; $('chatBox').hidden = true;
+    $('sTime').textContent = '—'; $('sPath').textContent = '—'; $('sRtt').textContent = '—'; $('sFile').textContent = '—';
+    $('chat').innerHTML = ''; $('chatBox').hidden = true; $('fileNote').textContent = FILE_NOTE;
     renderReport();
   }
   $('reset').onclick = () => setRole(state.role);
@@ -516,6 +579,7 @@ stun:stun.cloudflare.com:3478</textarea>
       lines.push(`Канал: ${state.result || 'в процессе'}` + (state.connectMs != null ? ` за ${fmtMs(state.connectMs)}` : '') + `; соединение: ${state.ice}`);
       if (state.path) lines.push(`Путь: ${state.path}`);
       if (state.rtt != null) lines.push(`Задержка туда-обратно: ${state.rtt} мс`);
+      if (state.fileResult) lines.push(`Файл: ${state.fileResult}`);
     }
     $('report').textContent = lines.join('\n');
   }
