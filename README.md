@@ -23,7 +23,7 @@
 ошибки. Работает на стандартной библиотеке Python: на iPhone в a-Shell, на Android в Termux.
 
 ```
-curl -O https://nzzima.github.io/webrtc-test/mailbox_test.py
+curl https://nzzima.github.io/webrtc-test/mailbox_test.py > mailbox_test.py
 python3 mailbox_test.py
 ```
 
