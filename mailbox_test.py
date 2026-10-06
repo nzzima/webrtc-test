@@ -41,8 +41,9 @@ def load_config():
 class Box:
     def __init__(self, name, login, password, device):
         self.name, self.login, self.password, self.device = name, login, password, device
-        self.imap, self.last_uid, self.seq = None, None, 0
-        self.logins = self.written = 0
+        self.imap, self.first_uid, self.seq = None, None, 0
+        self.done = set()  # UID уже разобранных писем
+        self.logins = self.written = self.late_uid = self.stray = 0
         self.append_s, self.errors = [], []
         self.offsets, self.reads = [], []  # часы телефона минус часы сервера; (прочитано, сохранено)
         self.peers = set()
@@ -63,8 +64,8 @@ class Box:
         typ, data = self.imap.select(FOLDER)
         if typ != 'OK':
             raise imaplib.IMAP4.error(f'SELECT {FOLDER}: {data}')
-        if self.last_uid is None:  # старые письма прошлых сеансов не считаем
-            self.last_uid = max(self.search(1), default=0)
+        if self.first_uid is None:  # старые письма прошлых сеансов не считаем
+            self.first_uid = max(self.search(1), default=0) + 1
 
     def search(self, start):
         typ, data = self.imap.uid('SEARCH', None, f'UID {start}:*')
@@ -86,14 +87,25 @@ class Box:
 
     def poll(self):
         self.imap.noop()
-        for uid in self.search(self.last_uid + 1):
+        top = max(self.done, default=0)
+        # ищем все письма сеанса: письмо с меньшим UID может стать видно позже письма с большим
+        for uid in self.search(self.first_uid):
+            if uid in self.done:
+                continue
             typ, data = self.imap.uid('FETCH', str(uid), '(INTERNALDATE BODY.PEEK[HEADER.FIELDS (X-MTEST)])')
             seen = time.time()
-            self.last_uid = uid
-            header = data[0][1].decode(errors='replace') if data and isinstance(data[0], tuple) else ''
-            parts = header.replace('X-Mtest:', '').split()
+            # imaplib кладёт в ответ и непрошеные FETCH сервера; литерал с заголовком есть только у нашего
+            i = next((i for i, p in enumerate(data) if isinstance(p, tuple)), None)
+            self.stray += sum(1 for p in data if isinstance(p, bytes) and p[:1].isdigit())
+            if i is None:  # письма нет в ответе, повторим при следующем опросе
+                continue
+            self.done.add(uid)
+            if uid < top:
+                self.late_uid += 1
+            parts = data[i][1].decode(errors='replace').replace('X-Mtest:', '').split()
+            tail = data[i + 1] if i + 1 < len(data) and isinstance(data[i + 1], bytes) else b''
             # INTERNALDATE ставит сервер при записи, с точностью до секунды; +0.5 убирает сдвиг округления вниз
-            stored = imaplib.Internaldate2tuple(b' '.join(p[0] if isinstance(p, tuple) else p for p in data if p))
+            stored = imaplib.Internaldate2tuple(data[i][0] + b' ' + tail)
             if len(parts) != 2 or not stored:
                 continue
             stored = time.mktime(stored) + 0.5
@@ -128,7 +140,7 @@ class Box:
             delays = [seen - offset - stored for seen, stored in self.reads]
             line += f', задержка медиана {statistics.median(delays):.1f} с, макс {max(delays):.1f} с'
         line += f', часы телефона {offset:+.1f} с к серверу' if self.offsets else ', часы не сверены'
-        line += f', ошибок {len(self.errors)}'
+        line += f', не по порядку UID {self.late_uid}, непрошеных FETCH {self.stray}, ошибок {len(self.errors)}'
         return '\n'.join([line] + ['  ' + e for e in self.errors[-10:]])
 
 
