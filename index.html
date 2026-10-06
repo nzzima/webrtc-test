@@ -85,6 +85,9 @@ th { color: var(--muted); font-weight: 600; }
 .qr { background: #fff; padding: 8px; border-radius: 8px; width: 100%; max-width: 360px; margin: 8px auto 0; }
 .qr svg { display: block; width: 100%; height: auto; }
 #scanBox video { display: block; width: 100%; max-height: 60vh; border-radius: 8px; background: #000; object-fit: cover; }
+.videos { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
+#remoteVideo { display: block; width: 100%; max-height: 60vh; object-fit: contain; }
+#localVideo { position: absolute; right: 8px; bottom: 8px; width: 28%; border-radius: 6px; border: 1px solid #fff; }
 pre.report { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px; font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 420px) { .roles { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -173,6 +176,7 @@ stun:stun.cloudflare.com:3478</textarea>
       <li><span class="k">Путь</span><span class="v" id="sPath">—</span></li>
       <li><span class="k">Задержка туда-обратно</span><span class="v" id="sRtt">—</span></li>
       <li><span class="k">Файл</span><span class="v" id="sFile">—</span></li>
+      <li><span class="k">Звонок</span><span class="v" id="sCall">—</span></li>
     </ul>
 
     <div id="chatBox" hidden>
@@ -187,6 +191,13 @@ stun:stun.cloudflare.com:3478</textarea>
         <button class="ghost" id="sendTest">Тестовые 10 МБ</button>
       </div>
       <p class="note" id="fileNote">Файл идёт напрямую по тому же каналу, что и чат. Скорость считают обе стороны.</p>
+      <div class="row"><button id="callAudio">Аудиозвонок</button><button id="callVideo">Видеозвонок</button><button class="ghost" id="hangup" hidden>Завершить</button></div>
+      <div class="row" id="incoming" hidden><span id="incomingText" style="flex:1 1 100%"></span><button id="answer">Ответить</button><button class="ghost" id="decline">Отклонить</button></div>
+      <div class="videos" id="videos" hidden><video id="remoteVideo" playsinline autoplay></video><video id="localVideo" playsinline autoplay muted></video></div>
+      <label for="rating">Как было слышно и видно в последнем звонке
+        <select id="rating"><option value="">—</option><option>хорошо</option><option>терпимо</option><option>плохо</option></select>
+      </label>
+      <p class="note">Звонок идёт напрямую, по тому же соединению, что и чат. Говорите из разных комнат или в наушниках, иначе будет эхо.</p>
     </div>
     <div class="row"><button class="ghost" id="reset">Начать заново</button></div>
   </section>
@@ -207,7 +218,8 @@ stun:stun.cloudflare.com:3478</textarea>
   const $ = id => document.getElementById(id);
   const GATHER_MS = 6000, CONNECT_MS = 30000;
   const state = { role: null, pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null,
-    cand: null, ice: 'не начато', result: null, stun: [], timer: null, pinger: null, tx: null, rx: null, fileResult: null };
+    cand: null, ice: 'не начато', result: null, stun: [], timer: null, pinger: null, tx: null, rx: null, fileResult: null,
+    call: null, calls: [] };
 
   const servers = () => $('stun').value.split('\n').map(s => s.trim()).filter(Boolean);
   const pill = (cls, text) => `<span class="pill ${cls}">${text}</span>`;
@@ -366,7 +378,8 @@ stun:stun.cloudflare.com:3478</textarea>
   $('roleB').onclick = () => setRole('B');
 
   function newPc() {
-    const pc = new RTCPeerConnection({ iceServers: servers().map(u => ({ urls: u })) });
+    // max-bundle: звук и видео звонка идут по уже собранному пути и не ищут свой
+    const pc = new RTCPeerConnection({ iceServers: servers().map(u => ({ urls: u })), bundlePolicy: 'max-bundle' });
     pc.oniceconnectionstatechange = () => {
       const s = pc.iceConnectionState;
       const map = { new: ['idle', 'не начато'], checking: ['wait', 'проверка путей'], connected: ['ok', 'соединено'],
@@ -508,7 +521,7 @@ stun:stun.cloudflare.com:3478</textarea>
       state.pinger = setInterval(() => { if (dc.readyState === 'open') dc.send(JSON.stringify({ k: 'ping', ts: performance.now() })); }, 2000);
       renderReport();
     };
-    dc.onclose = () => { $('sDc').innerHTML = pill('idle', 'закрыт'); clearInterval(state.pinger); };
+    dc.onclose = () => { $('sDc').innerHTML = pill('idle', 'закрыт'); clearInterval(state.pinger); endCall(false); };
     dc.onmessage = e => {
       if (typeof e.data !== 'string') { receiveChunk(e.data); return; }
       let m; try { m = JSON.parse(e.data); } catch { return; }
@@ -518,7 +531,159 @@ stun:stun.cloudflare.com:3478</textarea>
       else if (m.k === 'file') state.rx = { name: String(m.name), size: m.size, parts: [], got: 0, t0: performance.now() };
       else if (m.k === 'fileEnd' && state.rx) receiveEnd();
       else if (m.k === 'fileAck' && state.tx) sentAck(m.bytes);
+      else if (m.k === 'call') incomingCall(m);
+      else if (m.k === 'callAnswer') callAnswered(m);
+      else if (m.k === 'hangup') endCall(false);
     };
+  }
+
+  // --- звонок: звук и видео идут по уже открытому соединению, новые анкеты страница передаёт по каналу данных ---
+  const KIND = video => video ? 'видео' : 'аудио';
+  const LIMIT = { bandwidth: 'канал', cpu: 'процессор', other: 'другое' };
+  const med = a => { const s = a.filter(x => x != null).sort((x, y) => x - y); return s.length ? s[s.length >> 1] : null; };
+  const mmss = sec => { const t = Math.round(sec); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+
+  function callUi() {
+    const c = state.call;
+    $('callAudio').hidden = $('callVideo').hidden = !!c;
+    $('hangup').hidden = !c || !!c.ringing;
+    $('incoming').hidden = !(c && c.ringing);
+    $('videos').hidden = !(c && c.video && !c.ringing);
+  }
+  async function getMedia(video) {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true,
+      video: video && { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } });
+    $('localVideo').srcObject = video ? stream : null;
+    return stream;
+  }
+  // Потоки прошлого звонка используем снова, иначе каждый звонок добавлял бы в соединение новые.
+  async function attachMedia(stream) {
+    const used = new Set();
+    for (const track of stream.getTracks()) {
+      const t = state.pc.getTransceivers().find(t => t.currentDirection !== 'stopped' && !used.has(t) &&
+        t.receiver.track.kind === track.kind && !t.sender.track);
+      if (t) { t.direction = 'sendrecv'; await t.sender.replaceTrack(track); used.add(t); }
+      else { const sender = state.pc.addTrack(track); used.add(state.pc.getTransceivers().find(t => t.sender === sender)); }
+    }
+    state.pc.getTransceivers().forEach(t => { if (!used.has(t) && t.currentDirection !== 'stopped') t.direction = 'inactive'; });
+  }
+  function showRemote() {
+    const tracks = state.pc.getTransceivers().filter(t => ['sendrecv', 'recvonly'].includes(t.currentDirection)).map(t => t.receiver.track);
+    $('remoteVideo').srcObject = new MediaStream(tracks);
+    $('remoteVideo').play().catch(() => {});
+  }
+
+  async function startCall(video) {
+    if (!state.dc || state.dc.readyState !== 'open' || state.call) return;
+    const c = state.call = { video, out: true };
+    callUi(); $('sCall').textContent = 'звоним…';
+    try {
+      c.stream = await getMedia(video);
+      if (state.call !== c) return c.stream.getTracks().forEach(t => t.stop());
+      await attachMedia(c.stream);
+      await state.pc.setLocalDescription(await state.pc.createOffer());
+      state.dc.send(JSON.stringify({ k: 'call', video, sdp: state.pc.localDescription }));
+    } catch (e) { await endCall(true); $('sCall').textContent = 'не удалось: ' + e.message; }
+  }
+  async function incomingCall(m) {
+    if (state.call) {
+      // Оба нажали «Звонок» одновременно: остаётся звонок телефона, который начинал.
+      if (state.role === 'A' || !state.call.out) return;
+      await endCall(false);
+    }
+    state.call = { video: m.video, ringing: true, offer: m.sdp };
+    $('incomingText').textContent = `Напарник звонит: ${KIND(m.video)}`;
+    $('sCall').textContent = 'входящий звонок';
+    callUi();
+  }
+  async function answerCall() {
+    const c = state.call;
+    if (!c || !c.ringing) return;
+    c.ringing = false; callUi(); $('sCall').textContent = 'соединяем…';
+    try {
+      c.stream = await getMedia(c.video);
+      if (state.call !== c) return c.stream.getTracks().forEach(t => t.stop());
+      await state.pc.setRemoteDescription(c.offer);
+      await attachMedia(c.stream);
+      await state.pc.setLocalDescription(await state.pc.createAnswer());
+      state.dc.send(JSON.stringify({ k: 'callAnswer', sdp: state.pc.localDescription }));
+      callConnected(c);
+    } catch (e) { await endCall(true); $('sCall').textContent = 'не удалось: ' + e.message; }
+  }
+  async function callAnswered(m) {
+    const c = state.call;
+    if (!c || !c.out || c.t0) return;
+    try { await state.pc.setRemoteDescription(m.sdp); callConnected(c); }
+    catch (e) { await endCall(true); $('sCall').textContent = 'не удалось: ' + e.message; }
+  }
+  function callConnected(c) {
+    c.t0 = performance.now(); c.samples = [];
+    showRemote(); callUi();
+    c.timer = setInterval(() => sampleCall(c), 1000);
+  }
+  async function endCall(notify) {
+    const c = state.call;
+    if (!c) return;
+    state.call = null;
+    clearInterval(c.timer);
+    if (notify && state.dc && state.dc.readyState === 'open') state.dc.send(JSON.stringify({ k: 'hangup' }));
+    if (c.stream) c.stream.getTracks().forEach(t => t.stop());
+    if (state.pc && state.pc.signalingState !== 'closed') {
+      for (const t of state.pc.getTransceivers()) if (t.sender.track) await t.sender.replaceTrack(null).catch(() => {});
+      // анкета звонка без ответа: возвращаем соединение к прежнему состоянию
+      if (state.pc.signalingState === 'have-local-offer') await state.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+    }
+    $('remoteVideo').srcObject = null; $('localVideo').srcObject = null;
+    const text = c.samples && c.samples.length ? callText(c, false) : null;
+    if (text) { state.calls.push({ text, rating: '' }); $('rating').value = ''; }
+    $('sCall').textContent = text || (c.t0 ? 'звонок завершён в первую секунду' : 'звонок не состоялся');
+    callUi(); renderReport();
+  }
+  $('callAudio').onclick = () => startCall(false);
+  $('callVideo').onclick = () => startCall(true);
+  $('answer').onclick = answerCall;
+  $('decline').onclick = () => endCall(true);
+  $('hangup').onclick = () => endCall(true);
+  $('rating').onchange = () => { const c = state.calls[state.calls.length - 1]; if (c) { c.rating = $('rating').value; renderReport(); } };
+
+  async function sampleCall(c) {
+    const st = await state.pc.getStats();
+    if (state.call !== c) return;
+    const s = { t: performance.now(), bytes: 0, lost: 0, recv: 0 };
+    st.forEach(r => {
+      if (r.type === 'inbound-rtp') {
+        s.bytes += r.bytesReceived || 0; s.lost += r.packetsLost || 0; s.recv += r.packetsReceived || 0;
+        if (r.kind === 'audio' && r.jitter != null) s.jitter = r.jitter * 1000;
+        if (r.kind === 'video' && c.video) { s.w = r.frameWidth || 0; s.h = r.frameHeight || 0; s.fps = r.framesPerSecond; s.freezes = r.freezeCount; }
+      } else if (r.type === 'remote-inbound-rtp' && r.kind === 'audio' && r.roundTripTime != null) s.rtt = r.roundTripTime * 1000;
+      else if (r.type === 'outbound-rtp' && r.kind === 'video' && c.video && r.qualityLimitationReason) s.limit = r.qualityLimitationReason;
+    });
+    const prev = c.samples[c.samples.length - 1];
+    if (prev) s.kbps = (s.bytes - prev.bytes) * 8 / (s.t - prev.t);
+    else c.base = s;
+    c.samples.push(s);
+    $('sCall').textContent = 'идёт: ' + callText(c, true);
+    renderReport();
+  }
+  // live: значения последней секунды; иначе медианы за весь звонок
+  function callText(c, live) {
+    const ss = c.samples, last = ss[ss.length - 1], b = c.base;
+    const v = k => live ? last[k] : med(ss.map(x => x[k]));
+    const lost = last.lost - b.lost, all = lost + last.recv - b.recv;
+    const parts = [`${KIND(c.video)} ${mmss((last.t - c.t0) / 1000)}`, `приём ${Math.round(v('kbps') || 0)} кбит/с`,
+      `потери ${all > 0 ? (lost / all * 100).toFixed(1) : '0.0'}%`];
+    if (v('jitter') != null) parts.push(`дрожание ${Math.round(v('jitter'))} мс`);
+    if (v('rtt') != null) parts.push(`задержка ${Math.round(v('rtt'))} мс`);
+    if (c.video) {
+      const f = live ? last : [...ss].sort((x, y) => (x.h || 0) - (y.h || 0))[ss.length >> 1];
+      parts.push(`кадр ${f.w || 0}×${f.h || 0}`);
+      if (v('fps') != null) parts.push(`${Math.round(v('fps'))} к/с`);
+      if (last.freezes != null) parts.push(`замираний ${last.freezes - (b.freezes || 0)}`);
+      const lim = ss.filter(x => x.limit && x.limit !== 'none');
+      if (live && last.limit && last.limit !== 'none') parts.push(`упор в ${LIMIT[last.limit] || last.limit}`);
+      if (!live && lim.length) parts.push(`упор в ${LIMIT[lim[0].limit] || lim[0].limit} ${Math.round(lim.length / ss.length * 100)}% времени`);
+    }
+    return parts.join(', ');
   }
 
   async function readPath() {
@@ -551,8 +716,11 @@ stun:stun.cloudflare.com:3478</textarea>
 
   function resetChannel() {
     clearTimeout(state.timer); clearInterval(state.pinger); stopScan();
+    if (state.call) { clearInterval(state.call.timer); if (state.call.stream) state.call.stream.getTracks().forEach(t => t.stop()); }
     try { state.pc && state.pc.close(); } catch {}
-    Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null, tx: null, rx: null, fileResult: null });
+    Object.assign(state, { pc: null, dc: null, t0: 0, connectMs: null, path: null, rtt: null, cand: null, ice: 'не начато', result: null, tx: null, rx: null, fileResult: null,
+      call: null, calls: [] });
+    $('remoteVideo').srcObject = null; $('localVideo').srcObject = null; $('rating').value = ''; $('sCall').textContent = '—'; callUi();
     ['offerOut', 'answerIn', 'offerIn', 'answerOut'].forEach(id => $(id).value = '');
     ['mkOffer', 'mkAnswer'].forEach(id => $(id).disabled = false);
     ['cpOffer', 'connect', 'scanAnswer', 'cpAnswer'].forEach(id => $(id).disabled = true);
@@ -580,6 +748,8 @@ stun:stun.cloudflare.com:3478</textarea>
       if (state.path) lines.push(`Путь: ${state.path}`);
       if (state.rtt != null) lines.push(`Задержка туда-обратно: ${state.rtt} мс`);
       if (state.fileResult) lines.push(`Файл: ${state.fileResult}`);
+      state.calls.forEach((c, i) => lines.push(`Звонок ${i + 1}: ${c.text}` + (c.rating ? `; оценка: ${c.rating}` : '')));
+      if (state.call && state.call.samples && state.call.samples.length) lines.push(`Звонок идёт: ${callText(state.call, false)}`);
     }
     $('report').textContent = lines.join('\n');
   }
